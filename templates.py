@@ -4,20 +4,20 @@
 from database import Trip
 
 
-def merge_date_title(date, title):
-    return f"{title} · {date}"
+def merge_date_title(date, title, month):
+    return f"{title} · {date} ({month})"
 
 
 def telegram_new_trip(trip: Trip):
-    return f"New Trip: *{trip.date_title}*\n\n" f"[{trip.link}]({trip.link})"
+    return f"New Trip: {trip.date_title}\n\n" f"{trip.link}"[:4095]
 
 
 def telegram_updated_trip(trip: Trip):
     return (
-        f"Trip Changed: *{trip.date_title}*\n\n"
+        f"Trip Changed: {trip.date_title}\n\n"
         f"Was: {trip.old_date_title}\n\n"
-        f"[{trip.link}]({trip.link})"
-    )
+        f"{trip.link}"
+    )[:4095]
 
 def telegram_start_command(channel_name: str):
     return f"Hi, I am the VOCTrip bot. Follow {channel_name} to get updates whenever a new VOC trip is posted"

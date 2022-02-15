@@ -19,11 +19,14 @@ from templates import (
 from database import (
     Trip,
     extract_relevant_trips,
-    get_connector,
     save_new_trips,
     setup_database,
     update_updated_trips,
 )
+
+# TODO
+# - Add month name
+# - Fix SQL substitution
 
 # Set constants and load environment variables
 
@@ -50,11 +53,9 @@ logger = logging.getLogger(__name__)
 
 engine = create_engine(DATABASE_URL)
 
-session_factory = sessionmaker(bind=engine)
-Session = scoped_session(session_factory)
-
 # Create tables if not existing
-setup_database(Session)
+with engine.connect() as conn:
+    setup_database(conn)
 
 
 # Function definitions (Telegram bot is started below)
@@ -68,21 +69,24 @@ def parse_agenda():
 
     bs = BS(r.text, "html.parser")
 
-    events = bs.find_all("tr")
+    content = bs.find(id="content")
 
     parsed = []
 
-    for event in events:
+    for h3, table in zip(content.find_all("h3"), content.find_all("table")):
 
-        event_parts = event.find_all("td")
-        event_data = Trip(
-            BASE_URL + event.find("a").get("href"),
-            event_parts[0].text,
-            event_parts[1].text,
-            merge_date_title(event_parts[0].text, event_parts[1].text),
-        )
+        month = h3.text
+        events = table.find_all("tr")
+        
+        for event in events:
 
-        parsed.append(event_data)
+            event_parts = event.find_all("td")
+            event_data = Trip(
+                BASE_URL + event.find("a").get("href"),
+                merge_date_title(event_parts[0].text, event_parts[1].text, month),
+            )
+
+            parsed.append(event_data)
 
     logger.debug(f"Extracted {len(parsed)} trips from trip agenda")
 
@@ -95,54 +99,66 @@ def report_error(context: CallbackContext, error: Exception, msg: str = ""):
     context.bot.send_message(
         chat_id=MAINTAINER_CHAT_ID,
         text=error_msg,
-        parse_mode=ParseMode.MARKDOWN_V2,
     )
     logger.error(error_msg)
 
 
 def polling_handler(context: CallbackContext):
 
-    try:
-        trips = parse_agenda()
-    except Exception as e:
-        report_error(context, e, "Exception while reading trip agenda")
-        return
+    with engine.connect() as conn:
 
-    try:
-        new_trips, updated_trips = extract_relevant_trips(Session, trips)
-    except Exception as e:
-        report_error(context, e, "Exception while comparing trips to database")
-        return
+        try:
+            trips = parse_agenda()
+        except Exception as e:
+            report_error(context, e, "Exception while reading trip agenda")
+            return
 
-    try:
+        try:
+            new_trips, updated_trips = extract_relevant_trips(conn, trips)
+        except Exception as e:
+            report_error(context, e, "Exception while comparing trips to database")
+            return
 
-        for trip in new_trips:
-            context.bot.send_message(
-                chat_id=CHANNEL_NAME,
-                text=telegram_new_trip(trip),
-                parse_mode=ParseMode.MARKDOWN_V2,
+        # If there are many new trips (this should only happen after a database reset/downtime), 
+        # we must avoid sending to many messages, otherwise the Telegram API will throw an error.
+
+        if len(new_trips) > 3:
+            new_trips = new_trips[:3]
+            report_error(context, ValueError("Too many new trips, only showing 3"))
+
+        if len(updated_trips) > 3:
+            updated_trips = updated_trips[:3]
+            report_error(context, ValueError("Too many updated trips, only showing 3"))
+
+
+        try:
+
+            for trip in new_trips:
+               context.bot.send_message(
+                   chat_id=CHANNEL_NAME,
+                   text=telegram_new_trip(trip),
+               )
+
+            for trip in updated_trips:
+               context.bot.send_message(
+                   chat_id=CHANNEL_NAME,
+                   text=telegram_updated_trip(trip),
+               )
+            pass
+
+        except Exception as e:
+            report_error(
+                context,
+                e,
+                f"Exception while trying to send {new_trips=} and {updated_trips=}",
             )
+            return
 
-        for trip in updated_trips:
-            context.bot.send_message(
-                chat_id=CHANNEL_NAME,
-                text=telegram_updated_trip(trip),
-                parse_mode=ParseMode.MARKDOWN_V2,
-            )
-
-    except Exception as e:
-        report_error(
-            context,
-            e,
-            f"Exception while trying to send {new_trips=} and {updated_trips=}",
-        )
-        return
-
-    try:
-        save_new_trips(Session, new_trips)
-        update_updated_trips(Session, updated_trips)
-    except Exception as e:
-        report_error(context, e, "Exception while updating the database")
+        try:
+            save_new_trips(conn, new_trips)
+            update_updated_trips(conn, updated_trips)
+        except Exception as e:
+            report_error(context, e, "Exception while updating the database")
 
 
 def start_handler(update, context: CallbackContext):
@@ -168,7 +184,3 @@ updater.start_polling()
 updater.idle()
 
 logger.info("Bot started")
-
-# you can now use some_session to run multiple queries, etc.
-# remember to close it when you're finished!
-#Session.remove()
