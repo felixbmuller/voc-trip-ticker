@@ -4,9 +4,7 @@ import os
 import requests
 from bs4 import BeautifulSoup as BS
 from telegram.ext import Updater, CommandHandler, CallbackContext
-from telegram import ParseMode
 from dotenv import load_dotenv
-from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy import create_engine
 
 from templates import (
@@ -35,7 +33,7 @@ BASE_URL = "https://www.ubc-voc.com"
 
 load_dotenv()
 
-DATABASE_URL = os.environ["VOCTT_DATABASE_URL"]
+DATABASE_URL = os.environ["DATABASE_URL"]
 BOT_TOKEN = os.environ["VOCTT_BOT_TOKEN"]
 CHANNEL_NAME = os.environ["VOCTT_CHANNEL_NAME"]
 MAINTAINER_CHAT_ID = os.environ["VOCTT_MAINTAINER_CHAT_ID"]

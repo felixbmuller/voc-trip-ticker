@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 import logging
-from sqlite3 import connect
 
 logger = logging.getLogger(__name__)
 
