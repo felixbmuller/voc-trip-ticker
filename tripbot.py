@@ -1,21 +1,63 @@
-from webbrowser import get
+import logging
+import os
+
 import requests
 from bs4 import BeautifulSoup as BS
-import os
-import psycopg2
 from telegram.ext import Updater, CommandHandler, CallbackContext
 from telegram import ParseMode
+from dotenv import load_dotenv
+from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy import create_engine
+
+from templates import (
+    merge_date_title,
+    telegram_error_message,
+    telegram_new_trip,
+    telegram_start_command,
+    telegram_updated_trip,
+)
+from database import (
+    Trip,
+    extract_relevant_trips,
+    get_connector,
+    save_new_trips,
+    setup_database,
+    update_updated_trips,
+)
+
+# Set constants and load environment variables
 
 AGENDA_URL = "https://www.ubc-voc.com/tripagenda/upcoming.php"
 BASE_URL = "https://www.ubc-voc.com"
 
-DATABASE_URL = "placeholder"
-BOT_TOKEN = "placeholder"
-CHANNEL_NAME = "@voctripticker"
+load_dotenv()
 
-POLLING_INTERVAL = 60  # seconds
+DATABASE_URL = os.environ["VOCTT_DATABASE_URL"]
+BOT_TOKEN = os.environ["VOCTT_BOT_TOKEN"]
+CHANNEL_NAME = os.environ["VOCTT_CHANNEL_NAME"]
+MAINTAINER_CHAT_ID = os.environ["VOCTT_MAINTAINER_CHAT_ID"]
+POLLING_INTERVAL = int(os.environ["VOCTT_POLLING_INTERVAL"])  # seconds
 
-conn = psycopg2.connect(DATABASE_URL)
+# Setup logging
+
+logging.basicConfig(
+    level=logging.DEBUG, format="%(asctime)s [%(levelname)s]: %(message)s"
+)
+
+logger = logging.getLogger(__name__)
+
+# Connect to database
+
+engine = create_engine(DATABASE_URL)
+
+session_factory = sessionmaker(bind=engine)
+Session = scoped_session(session_factory)
+
+# Create tables if not existing
+setup_database(Session)
+
+
+# Function definitions (Telegram bot is started below)
 
 
 def parse_agenda():
@@ -33,83 +75,100 @@ def parse_agenda():
     for event in events:
 
         event_parts = event.find_all("td")
-        event_data = {
-            "date": event_parts[0].text,
-            "title": event_parts[1].text,
-            "link": BASE_URL + event.find("a").get("href"),
-        }
+        event_data = Trip(
+            BASE_URL + event.find("a").get("href"),
+            event_parts[0].text,
+            event_parts[1].text,
+            merge_date_title(event_parts[0].text, event_parts[1].text),
+        )
 
         parsed.append(event_data)
+
+    logger.debug(f"Extracted {len(parsed)} trips from trip agenda")
 
     return parsed
 
 
-def extract_relevant_trips(parsed_trips: list[dict]):
+def report_error(context: CallbackContext, error: Exception, msg: str = ""):
+    error_msg = telegram_error_message(error, msg)
 
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM known_trips;")
-    links = set(link for _, link in cur.fetchall())
-
-    new_trips = [t for t in parsed_trips if t["link"] not in links]
-
-    cur.close()
-    return new_trips
-
-
-def save_new_trips(new_trips: list[dict]):
-
-    cur = conn.cursor()
-
-    for t in new_trips:
-        cur.execute("INSERT INTO known_trips (link) VALUES (%s);", (t["link"],))
-
-    conn.commit()
-    cur.close()
+    context.bot.send_message(
+        chat_id=MAINTAINER_CHAT_ID,
+        text=error_msg,
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+    logger.error(error_msg)
 
 
 def polling_handler(context: CallbackContext):
 
-    trips = parse_agenda()
-    new_trips = extract_relevant_trips(trips)
+    try:
+        trips = parse_agenda()
+    except Exception as e:
+        report_error(context, e, "Exception while reading trip agenda")
+        return
 
-    for trip in new_trips:
-        context.bot.send_message(
-            chat_id=CHANNEL_NAME,
-            text=(
-                f"New Trip: *{trip['title']}* (_{trip['date']}_)\n\n"
-                f"[{trip['link']}]({trip['link']})"
-            ),
-            parse_mode=ParseMode.MARKDOWN_V2,
+    try:
+        new_trips, updated_trips = extract_relevant_trips(Session, trips)
+    except Exception as e:
+        report_error(context, e, "Exception while comparing trips to database")
+        return
+
+    try:
+
+        for trip in new_trips:
+            context.bot.send_message(
+                chat_id=CHANNEL_NAME,
+                text=telegram_new_trip(trip),
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+
+        for trip in updated_trips:
+            context.bot.send_message(
+                chat_id=CHANNEL_NAME,
+                text=telegram_updated_trip(trip),
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+
+    except Exception as e:
+        report_error(
+            context,
+            e,
+            f"Exception while trying to send {new_trips=} and {updated_trips=}",
         )
+        return
 
-    save_new_trips(new_trips)
+    try:
+        save_new_trips(Session, new_trips)
+        update_updated_trips(Session, updated_trips)
+    except Exception as e:
+        report_error(context, e, "Exception while updating the database")
 
 
 def start_handler(update, context: CallbackContext):
     """hook for /start"""
     context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text=f"Hi, I am the VOCTrip bot. Follow {CHANNEL_NAME} to get updates whenever a new VOC trip is posted",
+        text=telegram_start_command(CHANNEL_NAME),
     )
 
 
-def main():
+# Setup Telegram bot
 
-    cur = conn.cursor()
+updater = Updater(token=BOT_TOKEN, use_context=True)
 
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS known_trips (id serial PRIMARY KEY, link varchar);"
-    )
+updater.dispatcher.add_handler(CommandHandler("start", start_handler))
+updater.job_queue.run_repeating(polling_handler, interval=POLLING_INTERVAL, first=10)
 
-    conn.commit()
-    cur.close()
+logger.info(
+    f"Setup telegram handler and started polling every {POLLING_INTERVAL} seconds"
+)
 
-    updater = Updater(token=BOT_TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
-    job_queue = updater.job_queue
+updater.start_polling()
+updater.idle()
 
-    dispatcher.add_handler(CommandHandler("start", start_handler))
-    updater.start_polling()
+logger.info("Bot started")
 
-    job_queue.run_repeating(polling_handler, interval=POLLING_INTERVAL, first=10)
+# you can now use some_session to run multiple queries, etc.
+# remember to close it when you're finished!
+#Session.remove()
