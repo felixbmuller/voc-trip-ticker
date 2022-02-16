@@ -4,7 +4,7 @@ This is a simple Telegram bot to notify users about new or changed trips of the 
 Club](https://www.ubc-voc.com/). Subscribe to [@voctripticker](https://t.me/voctripticker) to get
 updates about new and changed trips as soon as they are posted. 
 
-![A few example messages of the bot](example.jpg)
+<img src="example.jpg" alt="A few example messages" width="300"/>
 
 The bot works by periodically requesting the trip agenda, comparing it with the trips it already
 knows about and sending updates to the Telegram channel. 
