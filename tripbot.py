@@ -71,7 +71,7 @@ def parse_agenda():
 
     parsed = []
 
-    for h3, table in zip(content.find_all("h3"), content.find_all("table")):
+    for h3, table in zip(content.find_all("h3"), content.find_all("table")[1:]):
 
         month = h3.text
         events = table.find_all("tr")
