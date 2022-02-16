@@ -2,7 +2,7 @@
 
 This is a simple Telegram bot to notify users about new or changed trips of the [UBC Varsity Outdoor
 Club](https://www.ubc-voc.com/). Subscribe to [@voctripticker](https://t.me/voctripticker) to get
-updates about new and changed trips as soon as they are posted. 
+updates about new and changed trips as soon as they are posted. This is a private project, it is not affiliated with the VOC!
 
 <img src="example.jpg" alt="A few example messages" width="300"/>
 
