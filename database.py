@@ -1,3 +1,6 @@
+"""Functions for fetching, storing and updating trips in the database. All functions require a
+SQLAlchemy Connection object to work."""
+
 from dataclasses import dataclass
 import logging
 
@@ -6,12 +9,31 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Trip:
+    """Represent one VOC trip. Date and title is preformatted into a single string for easier
+    handling. `old_date_title` is only set on updated trips.
+    """
     link: str
     date_title: str
     old_date_title: str = ""
 
 
-def extract_relevant_trips(conn, parsed_trips: list[Trip]):
+def extract_relevant_trips(conn, parsed_trips: list[Trip]) -> tuple[list[Trip], list[Trip]]:
+    """Compare the scraped trips with the database and return all new (link not present in the database) and updated (different description in the database) trips.
+
+    Parameters
+    ----------
+    conn : Connection
+        SQLAlchemy database connection
+    parsed_trips : list[Trip]
+        all trips scraped from the trip agenda
+
+    Returns
+    -------
+    list[Trip]
+        new trips
+    list[Trip]
+        updated trips (i.e. date or title changed)
+    """
 
     new_trips = []
     updated_trips = []
@@ -40,7 +62,16 @@ def extract_relevant_trips(conn, parsed_trips: list[Trip]):
     return new_trips, updated_trips
 
 
-def save_new_trips(conn, new_trips: list[dict]):
+def save_new_trips(conn, new_trips: list[Trip]):
+    """Store the given list of new trips in the database.
+
+    Parameters
+    ----------
+    conn : Connection
+        SQLAlchemy database connection
+    new_trips : list[Trip]
+        trips to insert
+    """
 
     for t in new_trips:
         conn.execute(
@@ -51,7 +82,16 @@ def save_new_trips(conn, new_trips: list[dict]):
     logger.debug(f"Committed {len(new_trips)} inserts.")
 
 
-def update_updated_trips(conn, updated_trips: list[dict]):
+def update_updated_trips(conn, updated_trips: list[Trip]):
+    """Update the given list of changed trips in the database.
+
+    Parameters
+    ----------
+    conn : Connection
+        SQLAlchemy database connection
+    updated_trips : list[Trip]
+        trips to update
+    """
 
 
     for t in updated_trips:
@@ -65,6 +105,13 @@ def update_updated_trips(conn, updated_trips: list[dict]):
 
 
 def setup_database(conn):
+    """Create the database table if it does not already exist.
+
+    Parameters
+    ----------
+    conn : Connection
+        SQLAlchemy database connection
+    """
 
 
     conn.execute(

@@ -1,35 +1,29 @@
+"""Main entry point, run this file to start the bot. Contains the bot logic and setup stuff."""
+
 import logging
 import os
 
-import requests
-from bs4 import BeautifulSoup as BS
+
 from telegram.ext import Updater, CommandHandler, CallbackContext
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 
 from templates import (
-    merge_date_title,
     telegram_error_message,
     telegram_new_trip,
     telegram_start_command,
     telegram_updated_trip,
 )
 from database import (
-    Trip,
     extract_relevant_trips,
     save_new_trips,
     setup_database,
     update_updated_trips,
 )
-
-# TODO
-# - Add month name
-# - Fix SQL substitution
+from scraper import parse_agenda
 
 # Set constants and load environment variables
 
-AGENDA_URL = "https://www.ubc-voc.com/tripagenda/upcoming.php"
-BASE_URL = "https://www.ubc-voc.com"
 
 load_dotenv()
 
@@ -38,6 +32,7 @@ BOT_TOKEN = os.environ["VOCTT_BOT_TOKEN"]
 CHANNEL_NAME = os.environ["VOCTT_CHANNEL_NAME"]
 MAINTAINER_CHAT_ID = os.environ["VOCTT_MAINTAINER_CHAT_ID"]
 POLLING_INTERVAL = int(os.environ["VOCTT_POLLING_INTERVAL"])  # seconds
+LOG_LEVEL = os.environ["VOCTT_LOG_LEVEL"]
 
 # Setup logging
 
@@ -56,39 +51,7 @@ with engine.connect() as conn:
     setup_database(conn)
 
 
-# Function definitions (Telegram bot is started below)
-
-
-def parse_agenda():
-    """extract all events from the VOC trip agenda in a machine readable way"""
-
-    r = requests.get(AGENDA_URL)
-    r.raise_for_status()
-
-    bs = BS(r.text, "html.parser")
-
-    content = bs.find(id="content")
-
-    parsed = []
-
-    for h3, table in zip(content.find_all("h3"), content.find_all("table")[1:]):
-
-        month = h3.text
-        events = table.find_all("tr")
-        
-        for event in events:
-
-            event_parts = event.find_all("td")
-            event_data = Trip(
-                BASE_URL + event.find("a").get("href"),
-                merge_date_title(event_parts[0].text, event_parts[1].text, month),
-            )
-
-            parsed.append(event_data)
-
-    logger.debug(f"Extracted {len(parsed)} trips from trip agenda")
-
-    return parsed
+# Bot event handlers (Telegram bot is started below)
 
 
 def report_error(context: CallbackContext, error: Exception, msg: str = ""):
@@ -117,7 +80,7 @@ def polling_handler(context: CallbackContext):
             report_error(context, e, "Exception while comparing trips to database")
             return
 
-        # If there are many new trips (this should only happen after a database reset/downtime), 
+        # If there are many new trips (this should only happen after a database reset/downtime),
         # we must avoid sending to many messages, otherwise the Telegram API will throw an error.
 
         if len(new_trips) > 3:
@@ -128,20 +91,19 @@ def polling_handler(context: CallbackContext):
             updated_trips = updated_trips[:3]
             report_error(context, ValueError("Too many updated trips, only showing 3"))
 
-
         try:
 
             for trip in new_trips:
-               context.bot.send_message(
-                   chat_id=CHANNEL_NAME,
-                   text=telegram_new_trip(trip),
-               )
+                context.bot.send_message(
+                    chat_id=CHANNEL_NAME,
+                    text=telegram_new_trip(trip),
+                )
 
             for trip in updated_trips:
-               context.bot.send_message(
-                   chat_id=CHANNEL_NAME,
-                   text=telegram_updated_trip(trip),
-               )
+                context.bot.send_message(
+                    chat_id=CHANNEL_NAME,
+                    text=telegram_updated_trip(trip),
+                )
             pass
 
         except Exception as e:
